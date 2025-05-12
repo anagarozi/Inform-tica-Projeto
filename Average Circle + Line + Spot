@@ -1,0 +1,92 @@
+#primeira biblioteca usada foi o is_sprocket1
+
+import cv2
+from matplotlib import pyplot as plt
+import numpy as np
+
+def circunf(puntos):
+''' Returns A,B,C of circumference x2+y2+Ax+By+C=0
+que ajusta los puntos'''
+
+n=len(puntos)
+A=np.ones( (n,3), np.float32)
+
+for i in range(n):
+    A[i][0]= puntos[i][0]
+    A[i][1]= puntos[i][1]
+
+b=np.ones( (n,1), np.float32)
+for i in range(n):
+    b[i][0] = - puntos[i][0]**2 - puntos[i][1]**2 
+
+# The pseudo-inverse of a matrix A, denoted A^+, is defined as: 
+# the matrix that ‘solves’ [the least-squares problem] Ax = b,
+# i.e., if \bar{x} is said solution, then A^+ is that matrix such that x = A^+ b.        
+
+pseudo_inv_A= np.linalg.pinv(A)
+
+ABC=pseudo_inv_A@b; #solve the system of equations Ax=b
+return ABC.flatten() #flatten the result to 1D array
+
+#import image
+
+img = cv2.imread('Y:/Images Final Industrial/gear2.png',0)
+img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+img_bin = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)[1]
+#extract external contours
+contours = cv2.findContours(img_bin, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
+biggest_contour = max(contours, key=len) #get the biggest contour
+img_contour = np.zeros_like(img_bin) #create a black image to draw contours
+cv2.drawContours(img_contour, biggest_contour, -1, 255, 1) #-1 draw all contours
+
+#looking for contour points
+y, x = np.where(img_contour>0) #get the coordinates of the contour pixels
+points_contour = [] #list of contour points
+for i in range(len(x)):
+points_contour.append((x[i],y[i])) #append the points to the list
+
+[A,B,C]=circunf(points_contour); #compute the circumference parameters x2+y2+Ax+By+C=0
+radio= int (np.sqrt(A2+B2-4*C)/2)
+centro= (int(-A/2), int(-B/2));
+
+cv2.circle(img_color, centro, radio, (0, 0, 255), 1)
+
+#ESSA PARTE ESTA FAZENDO O CALCULO DA CIRCUFERENCIA
+
+#looking for contours points
+y, x = np.where(img_contour > 0)
+
+#compute the center of the contour
+center_x = sum(x)/len(y)
+center_y = sum(y)/len(x)
+
+max_distance = 0
+
+#compute the maximum distance from the center to the contour
+for i in range(len(x)):
+distance = np.sqrt((x[i]-center_x)**2 + (y[i]-center_y)**2)
+if distance > max_distance:
+max_distance = distance
+
+cv2.circle(img_contour,(int(center_x), int(center_y)), int(max_distance-40), 0, -1)
+
+num_labels, img_labels = cv2.connectedComponents(img_contour)
+print('Num teeth tool: ', num_labels-1)
+
+#ESSA PARTE ESTA CALCULANDO A LINHA PRINCIPAL
+
+#calcula o ponto final da linha
+
+start_point = centro
+end_point = (centro[0], 0)
+
+#desenha a linha
+
+cv2.line(img_color, start_point, end_point, (0, 0, 255), 1)
+
+#imagem colorida com linha e circunferência
+
+cv2.circle(img_color, centro, 3, (0, 0, 255), -1) # ponto na circunferencia
+plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+plt.axis('off')
+plt.show()
