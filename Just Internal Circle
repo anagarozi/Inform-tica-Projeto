@@ -1,0 +1,55 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+import ransac
+import lms
+import draw
+import points as pts
+
+# === 1. Carrega a imagem ===
+img = cv2.imread('d:/VITOR/Desktop/UVa/info/OpenCV/Projeto/gear_images/gear1.png', 0)
+if img is None:
+    print("[ERRO] Imagem não encontrada.")
+    exit()
+
+# === 2. Binariza com fundo preto e engrenagem branca ===
+img_bin = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+
+# === 3. Encontra todos os contornos (inclui internos) ===
+contours, _ = cv2.findContours(img_bin, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+
+# === 4. Valida se há contornos suficientes ===
+if len(contours) < 2:
+    print(f"[ERRO] Apenas {len(contours)} contorno(s) encontrado(s). Verifique a imagem ou a binarização.")
+    exit()
+
+# === 5. Ordena por área e pega o segundo maior contorno (furo interno) ===
+contours_sorted = sorted(contours, key=cv2.contourArea, reverse=True)
+contour_eixo = contours_sorted[1]
+
+# === 6. Desenha somente esse contorno em uma imagem separada ===
+img_contour_eixo = np.zeros_like(img_bin)
+cv2.drawContours(img_contour_eixo, [contour_eixo], -1, 255, 1)
+
+# === 7. Extrai pontos do contorno ===
+pontos = pts.get_contour_points(img_contour_eixo)
+
+# === 8. Aplica RANSAC para remover outliers como o rasgo ===
+inliers = ransac.ransac_circunf(pontos, num_max_iter=100)
+
+# === 9. Ajusta a circunferência com mínimos quadrados ===
+circABC = lms.circunf(inliers)
+A, B, C = circABC
+cx, cy = int(-A / 2), int(-B / 2)
+raio = int(np.sqrt(A*2 + B*2 - 4*C) / 2)
+
+# === 10. Desenha a circunferência e o centro ===
+img_color = cv2.merge([img, img, img])
+cv2.circle(img_color, (cx, cy), raio, (0, 255, 0), 2)   # Circunferência verde
+cv2.circle(img_color, (cx, cy), 4, (255, 0, 0), -1)     # Centro vermelho
+
+# === 11. Mostra o resultado ===
+plt.imshow(img_color)
+plt.title("Circunferência do eixo + centro")
+plt.axis('off')
+plt.show()
