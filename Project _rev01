@@ -1,0 +1,175 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon May 12 14:20:32 2025
+
+@author: Ana Julia
+"""
+
+#primeira biblioteca usada foi o is_sprocket1
+
+import cv2
+from matplotlib import pyplot as plt
+import numpy as np
+
+
+def circunf(puntos):
+    '''   Returns A,B,C of circumference x2+y2+Ax+By+C=0
+    que ajusta los puntos'''
+
+    n=len(puntos)
+    A=np.ones( (n,3), np.float32)
+
+    for i in range(n):
+        A[i][0]= puntos[i][0]
+        A[i][1]= puntos[i][1]
+
+    b=np.ones( (n,1), np.float32)
+    for i in range(n):
+        b[i][0] = - puntos[i][0]**2 - puntos[i][1]**2 
+
+    pseudo_inv_A= np.linalg.pinv(A)
+    ABC=pseudo_inv_A@b
+    return ABC.flatten()
+
+# Import image
+img = cv2.imread('C:/Users/Ana Julia/.spyder-py3/Images Final/gear2.png',0)
+img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+img_bin = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)[1]
+img_bin_original = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY+cv2.THRESH_OTSU)[1]
+
+#extract external contours
+contours = cv2.findContours(img_bin, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
+biggest_contour = max(contours, key=len)
+img_contour = np.zeros_like(img_bin)
+cv2.drawContours(img_contour, biggest_contour, -1, 255, 1)
+
+#looking for contour points
+y, x = np.where(img_contour>0)
+points_contour = []
+for i in range(len(x)):
+    points_contour.append((x[i],y[i]))
+
+[A,B,C]=circunf(points_contour)
+radio= int (np.sqrt(A**2+B**2-4*C)/2)
+centro= (int(-A/2), int(-B/2));
+
+cv2.circle(img_color, centro, radio, (0, 0, 255), 1)
+
+#looking for contours points
+y, x = np.where(img_contour > 0)
+
+#compute the center of the contour
+center_x = sum(x)/len(y)
+center_y = sum(y)/len(x)
+
+max_distance = 0
+
+#compute the maximum distance from the center to the contour
+for i in range(len(x)):
+    distance = np.sqrt((x[i]-center_x)**2 + (y[i]-center_y)**2)
+    if distance > max_distance:
+        max_distance = distance
+
+cv2.circle(img_contour,(int(center_x), int(center_y)), int(max_distance-40), 0, -1)
+
+num_labels, img_labels = cv2.connectedComponents(img_contour)
+
+#ESSA PARTE ESTA CALCULANDO A LINHA PRINCIPAL
+
+start_point = centro
+end_point = (centro[0], 0)
+cv2.line(img_color, start_point, end_point, (0, 0, 255), 1)
+cv2.circle(img_color, centro, 3, (0, 0, 255), -1)
+
+# Encontrar contornos (incluindo internos)
+contours_all = cv2.findContours(img_bin, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)[0]
+
+#CÍRCULO INTERNO (furo do eixo)
+if len(contours_all) >= 2:
+    contours_sorted = sorted(contours_all, key=cv2.contourArea, reverse=True)
+    contour_eixo = contours_sorted[1]  # Segundo maior contorno (furo)
+
+    img_contour_eixo = np.zeros_like(img_bin)
+    cv2.drawContours(img_contour_eixo, [contour_eixo], -1, 255, 1)
+
+    y_eixo, x_eixo = np.where(img_contour_eixo > 0)
+    pontos_eixo = [(x_eixo[i], y_eixo[i]) for i in range(len(x_eixo))]
+
+    if len(pontos_eixo) > 10:
+        A_eixo, B_eixo, C_eixo = circunf(pontos_eixo)
+        cx, cy = int(-A_eixo / 2), int(-B_eixo / 2)
+        raio_eixo = int(np.sqrt(A_eixo**2 + B_eixo**2 - 4*C_eixo) / 2)
+
+        # Círculo do furo em azul
+        cv2.circle(img_color, (cx, cy), raio_eixo, (0, 0, 255), 1)
+
+
+# DETECÇÃO DA RETA PARALELA À ABERTURA DIFERENCIADA
+
+# Ignorar o maior (engrenagem externa), focar nos menores internos
+contours_sorted = sorted(contours_all, key=cv2.contourArea, reverse=True)
+
+for i, contour in enumerate(contours_sorted[1:], start=2):
+    area = cv2.contourArea(contour)
+    if area < 50:  # ignorar ruídos pequenos
+        continue
+
+    # Criar máscara apenas para esse contorno
+    mask_inner = np.zeros_like(img_bin)
+    cv2.drawContours(mask_inner, [contour], -1, 255, -1)
+
+    ys, xs = np.where(mask_inner == 255)
+    if len(xs) < 20:
+        continue  # muito pequeno
+
+    pts = np.column_stack((xs, ys))
+
+    # PCA para direção principal
+    mean, eigenvectors = cv2.PCACompute(pts.astype(np.float32), mean=np.array([]))
+
+    center = tuple(mean[0].astype(int))
+    dir_vector = eigenvectors[0]
+    length = 300  # comprimento grande para garantir visualização
+
+    pt1 = (int(center[0] - dir_vector[0]*length), int(center[1] - dir_vector[1]*length))
+    pt2 = (int(center[0] + dir_vector[0]*length), int(center[1] + dir_vector[1]*length))
+
+    # Desenhar a linha amarela
+    cv2.line(img_color, pt1, pt2, (0, 0, 255), 1)
+    break  # desenhar apenas no primeiro contorno válido
+
+
+# CALCULAR O MENOR ÂNGULO ENTRE AS DUAS RETAS
+
+# Encontrar os vetores diretores das duas linhas
+dir_vector1 = eigenvectors[0]  # vetor diretor da linha amarela (contorno interno)
+dir_vector2 = np.array([end_point[0] - start_point[0], end_point[1] - start_point[1]])  # vetor diretor da linha principal (red)
+
+# Normalizar os vetores para garantir que eles tenham norma 1
+norm1 = np.linalg.norm(dir_vector1)
+norm2 = np.linalg.norm(dir_vector2)
+
+dir_vector1_normalized = dir_vector1 / norm1
+dir_vector2_normalized = dir_vector2 / norm2
+
+# Calcular o produto escalar
+dot_product = np.dot(dir_vector1_normalized, dir_vector2_normalized)
+
+# Calcular o ângulo em radianos
+angle_radians = np.arccos(dot_product)
+
+# Converter o ângulo para graus
+angle_degrees = np.degrees(angle_radians)
+
+# Garantir que o ângulo seja o menor (<= 90 graus)
+if angle_degrees > 90:
+    angle_degrees = 180 - angle_degrees
+    
+# Mostrar resultados
+plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+plt.axis('off')
+plt.show()
+
+print(f'Radius: {raio_eixo:.2f} pixels')
+print('Number of teeth: ', num_labels-1)
+print(f'Angle: {angle_degrees:.2f}°')
