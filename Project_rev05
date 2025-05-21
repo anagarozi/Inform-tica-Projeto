@@ -1,0 +1,277 @@
+#first library is_sprocket1
+#to count the teeth, i used the program clean image and count teeth
+#to make depth i use the same logic of the count teeth, but with the smallest circle founded (biggest internal circle)
+
+import cv2
+from matplotlib import pyplot as plt
+import numpy as np
+
+def circunf(pontos):
+    '''   Returns A,B,C of circumference x2+y2+Ax+By+C=0
+    que ajusta los puntos'''
+
+    n = len(pontos)
+    A = np.ones((n, 3), np.float32)
+
+    for i in range(n):
+        A[i][0] = pontos[i][0]
+        A[i][1] = pontos[i][1]
+
+    b = np.ones((n, 1), np.float32)
+    for i in range(n):
+        b[i][0] = -pontos[i][0]**2 - pontos[i][1]**2
+
+    pseudo_inv_A = np.linalg.pinv(A)
+    ABC = pseudo_inv_A @ b
+    return ABC.flatten()
+
+#import image
+img = cv2.imread('C:/Users/Ana Julia/.spyder-py3/Images Final/gear1.png', 0)
+img_color = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+img_bin = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+
+#extract external contours
+contours = cv2.findContours(img_bin, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)[0]
+biggest_contour = max(contours, key=len)
+img_contour = np.zeros_like(img_bin)
+cv2.drawContours(img_contour, biggest_contour, -1, 255, 1)
+
+#looking for contour points
+y, x = np.where(img_contour > 0)
+points_contour = [(x[i], y[i]) for i in range(len(x))]
+
+[A, B, C] = circunf(points_contour)
+radio = int(np.sqrt(A**2 + B**2 - 4 * C) / 2)
+centro = (int(-A / 2), int(-B / 2))
+cv2.circle(img_color, centro, radio, (0, 0, 255), 1)
+
+#compute the center of the contour
+center_x = sum(x) / len(y)
+center_y = sum(y) / len(x)
+
+max_distance = 0
+for i in range(len(x)):
+    distance = np.sqrt((x[i] - center_x)**2 + (y[i] - center_y)**2)
+    if distance > max_distance:
+        max_distance = distance
+
+cv2.circle(img_contour, (int(center_x), int(center_y)), int(max_distance - 40), 0, -1)
+
+num_labels, img_labels = cv2.connectedComponents(img_contour)
+
+#PRINCIPAL LINE
+start_point = centro
+end_point = (centro[0], 0)
+cv2.line(img_color, start_point, end_point, (0, 0, 255), 1)
+cv2.circle(img_color, centro, 3, (0, 0, 255), -1)
+
+#finding all contours - alterando para que eu encontre o interno ******
+result = cv2.findContours(img_bin, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+
+if len(result) == 3:
+    _, contours_all, hierarchy = result
+else:
+    contours_all, hierarchy = result
+
+if hierarchy is not None and hierarchy.ndim == 3 and hierarchy.shape[2] == 4:
+    hierarchy = hierarchy[0]
+    internal_contours = [contours_all[i] for i, h in enumerate(hierarchy) if h[3] != -1]
+
+    if internal_contours:
+        largest_internal_contour = max(internal_contours, key=cv2.contourArea)
+        #tirei o contorno verde da imagem principal, mas o cálculo tá aqui
+
+        #tentando esconder o resto da imagem para identificar apenas o formato diferenciado
+        mask_total = np.zeros_like(img_bin)
+        cv2.drawContours(mask_total, [largest_internal_contour], -1, 255, -1)
+
+#internal circle (hole) - ignoring the details
+img_blur = cv2.medianBlur(img, 5)
+circles = cv2.HoughCircles(img_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=20,
+                           param1=50, param2=30, minRadius=10, maxRadius=80)
+
+cx = cy = raio_eixo = None
+if circles is not None:
+    circles = np.uint16(np.around(circles))
+    h, w = img.shape
+    img_center = np.array([w // 2, h // 2])
+
+    min_dist = float('inf')
+    best_circle = None
+
+    for circle in circles[0, :]:
+        center = np.array([circle[0], circle[1]])
+        dist = np.linalg.norm(center - img_center)
+        if dist < min_dist:
+            min_dist = dist
+            best_circle = circle
+
+    if best_circle is not None:
+        cx, cy, raio_eixo = best_circle
+        cv2.circle(img_color, (cx, cy), raio_eixo, (0, 0, 255), 1)
+
+        circle_section = raio_eixo + 10
+        mask_circle = np.zeros_like(img_bin)
+        cv2.circle(mask_circle, (cx, cy), circle_section, 255, 1)
+
+        ys, xs = np.where(mask_circle == 255)
+        white_region = cv2.threshold(img, 200, 255, cv2.THRESH_BINARY)[1]
+        branco_no_circulo = white_region[ys, xs]
+        pixels_brancos = np.sum(branco_no_circulo == 255)
+
+        # Continua se a máscara e o contorno maior interno também existirem
+        if 'mask_total' in locals():
+            mask_circle_plus = np.zeros_like(img_bin)
+            
+            # 1. Desenhar apenas o CONTORNO da forma interna (não preenchido)
+            contorno_img = np.zeros_like(img_bin)
+            cv2.drawContours(contorno_img, [largest_internal_contour], -1, 255, 2)  # espessura 2 px
+            
+            # 2. Criar máscara do círculo maior (já existe)
+            mask_circle_plus = np.zeros_like(img_bin)
+            cv2.circle(mask_circle_plus, (cx, cy), raio_eixo + 15, 255, -1)
+            
+            # 3. Inverter a máscara do círculo (para manter o que está FORA dele)
+            mask_circle_inv = cv2.bitwise_not(mask_circle_plus)
+            
+            # 4. Aplicar a máscara invertida ao contorno (só sobra o traço fora do círculo)
+            contorno_fora_do_circulo = cv2.bitwise_and(contorno_img, mask_circle_inv)
+            
+            # 5. Criar imagem colorida para exibir apenas o contorno verde restante
+            img_contorno_recortado = np.zeros_like(img_color)
+            img_contorno_recortado[contorno_fora_do_circulo == 255] = (0, 255, 0)  # verde
+            
+            # Lista para armazenar os pontos verdes
+            
+            pontos_verdes = []
+                            
+            # Percorre toda a imagem procurando os pixels verdes (0,255,0)
+            for y in range(img_contorno_recortado.shape[0]):
+                for x in range(img_contorno_recortado.shape[1]):
+                    b, g, r = img_contorno_recortado[y, x]
+                    if b == 0 and g == 255 and r == 0:
+                        pontos_verdes.append([x, y])
+
+            # Converte para array se houver pontos suficientes
+            if len(pontos_verdes) > 20:
+                pts = np.array(pontos_verdes, dtype=np.float32)
+
+            # Aplica PCA para encontrar a direção principal (tangente)
+            mean, eigenvectors = cv2.PCACompute(pts, mean=np.array([]))
+            
+            center = tuple(mean[0].astype(int))
+            direction = eigenvectors[0]
+            length = 200  # comprimento da linha que será desenhada
+            
+            pt1 = (int(center[0] - direction[0]*length), int(center[1] - direction[1]*length))
+            pt2 = (int(center[0] + direction[0]*length), int(center[1] + direction[1]*length))
+            
+            #Storing the Straight Tangent
+            reta_tangente = (pt1, pt2)
+            
+            # Desenha a reta tangente em vermelho
+            cv2.line(img_contorno_recortado, pt1, pt2, (0, 0, 255), 3)
+            
+            # Mostra a imagem final com a reta tangente
+            plt.imshow(cv2.cvtColor(img_contorno_recortado, cv2.COLOR_BGR2RGB))
+            plt.title("Tangente ao contorno da chaveta")
+            plt.axis("off")
+            plt.show()
+    else:
+        pass
+
+#DETECTION OF THE LINE PARALLEL TO THE DIFFERENTIATED OPENING
+contours_sorted = sorted(contours_all, key=cv2.contourArea, reverse=True)
+
+for i, contour in enumerate(contours_sorted[1:], start=2):
+    area = cv2.contourArea(contour)
+    if area < 50:
+        continue
+
+    mask_inner = np.zeros_like(img_bin)
+    cv2.drawContours(mask_inner, [contour], -1, 255, -1)
+
+    ys, xs = np.where(mask_inner == 255)
+    if len(xs) < 20:
+        continue
+
+    pts = np.column_stack((xs, ys))
+    mean, eigenvectors = cv2.PCACompute(pts.astype(np.float32), mean=np.array([]))
+
+    center = tuple(mean[0].astype(int))
+    dir_vector = eigenvectors[0]
+    length = 300
+
+    pt1 = (int(center[0] - dir_vector[0]*length), int(center[1] - dir_vector[1]*length))
+    pt2 = (int(center[0] + dir_vector[0]*length), int(center[1] + dir_vector[1]*length))
+
+    reta_chaveta = (pt1, pt2)
+    
+    cv2.line(img_color, pt1, pt2, (0, 0, 255), 1)
+    break
+
+#CALCULATE THE SMALLEST ANGLE BETWEEN THE STRAIGHT
+if 'dir_vector' in locals():
+    dir_vector1 = dir_vector
+    dir_vector2 = np.array([end_point[0] - start_point[0], end_point[1] - start_point[1]])
+
+    norm1 = np.linalg.norm(dir_vector1)
+    norm2 = np.linalg.norm(dir_vector2)
+
+    dir_vector1_normalized = dir_vector1 / norm1
+    dir_vector2_normalized = dir_vector2 / norm2
+
+    dot_product = np.dot(dir_vector1_normalized, dir_vector2_normalized)
+    angle_radians = np.arccos(dot_product)
+    angle_degrees = np.degrees(angle_radians)
+
+    if angle_degrees > 90:
+        angle_degrees = 180 - angle_degrees
+
+# CALCULAR A PROFUNDIDADE DA CHAVETA (depth_k)
+if 'reta_chaveta' in locals() and 'reta_tangente' in locals() and raio_eixo is not None:
+    # Vetor da reta da chaveta
+    pt1_ch, pt2_ch = reta_chaveta
+    dir_chaveta = np.array([pt2_ch[0] - pt1_ch[0], pt2_ch[1] - pt1_ch[1]])
+    dir_chaveta = dir_chaveta / np.linalg.norm(dir_chaveta)
+
+    # Ponto da reta tangente (vamos usar o ponto médio dela como ponto de profundidade máxima)
+    pt1_tan, pt2_tan = reta_tangente
+    ponto_tangente = ((pt1_tan[0] + pt2_tan[0]) // 2, (pt1_tan[1] + pt2_tan[1]) // 2)
+
+    # Projeção do ponto tangente na reta da chaveta
+    vetor_tang = np.array([ponto_tangente[0] - pt1_ch[0], ponto_tangente[1] - pt1_ch[1]])
+    projecao_tang = np.dot(vetor_tang, dir_chaveta)
+    ponto_proj_tang = pt1_ch[0] + projecao_tang * dir_chaveta[0], pt1_ch[1] + projecao_tang * dir_chaveta[1]
+
+    # Centro do círculo (raio eixo)
+    ponto_raio = (cx, cy)
+
+    # Projeção do centro do eixo na reta da chaveta
+    vetor_raio = np.array([ponto_raio[0] - pt1_ch[0], ponto_raio[1] - pt1_ch[1]])
+    projecao_raio = np.dot(vetor_raio, dir_chaveta)
+    ponto_proj_raio = pt1_ch[0] + projecao_raio * dir_chaveta[0], pt1_ch[1] + projecao_raio * dir_chaveta[1]
+
+    # Distância entre as projeções
+    depth_k = np.linalg.norm(np.array(ponto_proj_tang) - np.array(ponto_proj_raio))
+
+    # Exibir na imagem
+    img_result = img_color.copy()
+    cv2.circle(img_result, (int(ponto_proj_tang[0]), int(ponto_proj_tang[1])), 3, (0, 255, 0), -1)
+    cv2.circle(img_result, (int(ponto_proj_raio[0]), int(ponto_proj_raio[1])), 3, (255, 0, 0), -1)
+    cv2.line(img_result, (int(ponto_proj_tang[0]), int(ponto_proj_tang[1])), (int(ponto_proj_raio[0]), int(ponto_proj_raio[1])), (255, 0, 255), 2)
+
+    plt.imshow(cv2.cvtColor(img_result, cv2.COLOR_BGR2RGB))
+    plt.title("Profundidade da chaveta")
+    plt.axis("off")
+    plt.show()
+
+    plt.imshow(cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB))
+    plt.axis('off')
+    plt.show()
+
+    print("Radius:", raio_eixo, "pixels")
+    print("Number of teeth: ", num_labels - 1)
+    print(f"Angle: {angle_degrees:.2f}°")
+    print("Width of the keyway W:", pixels_brancos, "pixels")
+    print(f"Depth of th keyway W: {depth_k:.2f} pixels")
